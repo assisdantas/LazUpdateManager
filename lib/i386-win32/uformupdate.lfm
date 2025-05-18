@@ -1,0 +1,34 @@
+object frmUpdates: TfrmUpdates
+  Left = 734
+  Height = 76
+  Top = 249
+  Width = 320
+  BorderIcons = [biSystemMenu, biMinimize]
+  BorderStyle = bsSingle
+  Caption = 'Atualização'
+  ClientHeight = 76
+  ClientWidth = 320
+  Position = poScreenCenter
+  LCLVersion = '4.0.0.4'
+  object pbgProgress: TProgressBar
+    Left = 8
+    Height = 20
+    Top = 48
+    Width = 304
+    TabOrder = 0
+  end
+  object lblDownloaded: TLabel
+    Left = 8
+    Height = 15
+    Top = 8
+    Width = 48
+    Caption = 'Aguarde!'
+  end
+  object lblDownloadedSize: TLabel
+    Left = 8
+    Height = 15
+    Top = 24
+    Width = 130
+    Caption = 'Verificando atualização...'
+  end
+end

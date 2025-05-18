@@ -1,0 +1,22 @@
+{ This file was automatically created by Lazarus. Do not edit!
+  This source is only used to compile and install the package.
+ }
+
+unit AutoUpdate;
+
+{$warn 5023 off : no warning about unused units}
+interface
+
+uses
+  uformupdate, autoupdatemain, LazarusPackageIntf;
+
+implementation
+
+procedure Register;
+begin
+  RegisterUnit('autoupdatemain', @autoupdatemain.Register);
+end;
+
+initialization
+  RegisterPackage('AutoUpdate', @Register);
+end.

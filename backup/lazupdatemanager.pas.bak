@@ -1,0 +1,374 @@
+unit LazUpdateManager;
+
+{$mode objfpc}{$H+}
+
+interface
+
+uses
+  Classes, SysUtils, fphttpclient, opensslsockets, openssl, LCLType, Dialogs, Windows, uformupdate, Forms;
+
+type
+  TDownloadFinishedEvent = procedure(Sender: TObject; const FilePath: string) of object;
+  TDownloadErrorEvent = procedure(Sender: TObject; const ErrorMessage: string) of object;
+  { TLazUpdateManager }
+  TLazUpdateManager = class(TComponent)
+    private
+      FVersionFileUrl: String;
+      FLatestFileUrl: String;
+      FChangelogUrl: String;
+      FChangeLogFileName: String;
+      FDownloadFileName: String;
+      FMessageEndDownload: String;
+      FShowMessageEndDownload: Boolean;
+      FMessageErrorDownload: String;
+      FShowMessageErrorDownload: Boolean;
+      FMessageVerifyVersionError: String;
+      FShowMessageVerifyVersionError: Boolean;
+      FMessageGetChangeLogError: String;
+      FShowMessageGetChangeLogError: Boolean;
+      DownloadingForm: TfrmUpdates;
+      FOnDownloadFinished: TDownloadFinishedEvent;
+      FOnDownloadError: TDownloadErrorEvent;
+      function CompareVersions(const Version1, Version2: string): Integer;
+		  function ReadLatestVersion(const versionFileName: string): string;
+		  function ConvertToPercent(maxValue, curValue: real): string;
+		  function ConvertToMegabyte(curValue: real): Double;
+		  procedure DownloadException(Sender: TObject; E: Exception);
+		  procedure ClientDataReceived(Sender: TObject; const ContentLength, CurrentPos: Int64);
+	  public
+	    CurrentVersion: string;
+	    LatestVersion: string;
+      FileLength: string;
+      constructor Create(AOwner: TComponent); override;
+      function GetExeVersion: string;
+		  function GetCurrentVersion: string;
+		  function GetLatestVersion: string;
+      function CheckForUpdates: boolean;
+      procedure DownloadNewVersion;
+      function GetChangeLogFile: boolean;
+    published
+      property VersionFileURL: string read FVersionFileUrl write FVersionFileUrl;
+      property LatestFileURL: string read FLatestFileUrl write FLatestFileUrl;
+      property ChangeLogURL: string read FChangelogUrl write FChangelogUrl;
+      property DownloadFileName: string read FDownloadFileName write FDownloadFileName;
+      property ChangeLogFileName: string read FChangeLogFileName write FChangeLogFileName;
+      property MessageEndDownload: string read FMessageEndDownload write FMessageEndDownload;
+      property ShowMessageEndDownload: boolean read FShowMessageEndDownload write FShowMessageEndDownload;
+      property MessageErrorDownload: string read FMessageErrorDownload write FMessageErrorDownload;
+      property ShowMessageErrorDownload: boolean read FShowMessageErrorDownload write FShowMessageErrorDownload;
+      property MessageVerifyVersionError: string read FMessageVerifyVersionError write FMessageVerifyVersionError;
+      property ShowMessageVerifyVersionError: boolean read FShowMessageVerifyVersionError write FShowMessageVerifyVersionError;
+      property MessageGetChangeLogError: string read FMessageGetChangeLogError write FMessageGetChangeLogError;
+      property ShowMessageGetChangeLogError: boolean read FShowMessageGetChangeLogError write FShowMessageGetChangeLogError;
+      property OnDownloadFinished: TDownloadFinishedEvent read FOnDownloadFinished write FOnDownloadFinished;
+      property OnDownloadError: TDownloadErrorEvent read FOnDownloadError write FOnDownloadError;
+  end;
+
+procedure Register;
+
+implementation
+
+procedure Register;
+begin
+  RegisterComponents('LazUpdateManager', [TLazUpdateManager]);
+end;
+
+{ TUpdateManager }
+
+function TLazUpdateManager.CompareVersions(const Version1, Version2: string
+  ): Integer;
+var
+  Ver1List, Ver2List: TStringList;
+  I, MaxParts: Integer;
+  Part1, Part2: Integer;
+begin
+  Result := 0; // Assume que as versões são iguais
+
+  Ver1List := TStringList.Create;
+  Ver2List := TStringList.Create;
+
+  try
+    Ver1List.Delimiter := '.';
+    Ver1List.StrictDelimiter := True;
+    Ver1List.DelimitedText := Version1;
+
+    Ver2List.Delimiter := '.';
+    Ver2List.StrictDelimiter := True;
+    Ver2List.DelimitedText := Version2;
+
+    MaxParts := Max(Ver1List.Count, Ver2List.Count);
+
+    for I := 0 to MaxParts - 1 do
+    begin
+      if I < Ver1List.Count then
+        Part1 := StrToInt(Ver1List[I])
+      else
+        Part1 := 0;
+
+      if I < Ver2List.Count then
+        Part2 := StrToInt(Ver2List[I])
+      else
+        Part2 := 0;
+
+      if Part1 > Part2 then
+        Exit(1)
+      else if Part1 < Part2 then
+        Exit(-1);
+    end;
+  finally
+    Ver1List.Free;
+    Ver2List.Free;
+  end;
+end;
+
+constructor TLazUpdateManager.Create(AOwner: TComponent);
+begin
+  inherited Create(AOwner);
+end;
+
+function TLazUpdateManager.GetExeVersion: string;
+var
+  lwdVerInfoSize: longword;
+  lwdVerValueSize: longword;
+  lwdDummy: longword;
+  ptrVerInfo: pointer;
+  VersionsInformation: PVSFixedFileInfo;
+begin
+
+  lwdVerInfoSize := GetFileVersionInfoSize(PChar(ParamStr(0)), lwdDummy);
+  GetMem(ptrVerInfo, lwdVerInfoSize);
+  GetFileVersionInfo(PChar(ParamStr(0)), 0, lwdVerInfoSize, ptrVerInfo);
+  VerQueryValue (ptrVerInfo, '\', Pointer(VersionsInformation), lwdVerValueSize);
+
+  with VersionsInformation^ do
+  begin
+    Result := IntToStr(dwFileVersionMS shr 16);
+    Result := Result + '.'  + IntToStr(dwFileVersionMS and $FFFF);
+    Result := Result + '.'  + IntToStr(dwFileVersionLS shr 16);
+    Result := Result + '.'  + IntToStr(dwFileVersionLS and $FFFF);
+  end;
+
+  FreeMem(ptrVerInfo, lwdVerInfoSize);
+end;
+
+function TUpdateManager.GetCurrentVersion: string;
+begin
+  Result := GetExeVersion;
+end;
+
+function TLazUpdateManager.GetLatestVersion: string;
+var
+  HTTPCliente: TFPHTTPClient;
+  NewVersionFile: TFileStream;
+begin
+  if (FVersionFileUrl = '') then
+  begin
+    MessageDlg('Atualização',
+      'Defina a URL de download e o nome do arquivo de atualização.',
+      mtWarning, [mbOk], 0, mbOk);
+    Exit;
+  end;
+
+  InitSSLInterface;
+
+  HTTPCliente := TFPHTTPClient.Create(nil);
+  NewVersionFile := TFileStream.Create('version', fmCreate or fmOpenWrite);
+
+  try
+    try
+	     HTTPCliente.AllowRedirect := True;
+	     HTTPCliente.Get(VersionFileURL, NewVersionFile);
+    except
+      on E: Exception do
+      begin
+        if ShowMessageVerifyVersionError then
+          MessageDlg('',
+            MessageVerifyVersionError + #13 + E.Message,
+            mtWarning,
+            [mbOk], 0, mbOk);
+      end;
+		end;
+	finally
+    NewVersionFile.Free;
+    HTTPCliente.Free;
+
+    Result := ReadLatestVersion('version');
+	end;
+end;
+
+function TLazUpdateManager.ReadLatestVersion(const versionFileName: string
+  ): string;
+var
+  FVersion: TextFile;
+  FVersionLine: String;
+begin
+  AssignFile(FVersion, VersionFileName);
+  try
+    Reset(FVersion);
+    if not Eof(FVersion) then
+    begin
+      ReadLn(FVersion, FVersionLine);
+      Result := FVersionLine;
+    end;
+  finally
+    CloseFile(FVersion);
+  end;
+end;
+
+function TLazUpdateManager.CheckForUpdates: boolean;
+begin
+  CurrentVersion := GetExeVersion;
+  LatestVersion := GetLatestVersion;
+
+  if CompareVersions(LatestVersion, CurrentVersion) > 0 then
+  begin
+    Result := True;
+  end;
+end;
+
+function TLazUpdateManager.ConvertToPercent(maxValue, curValue: real): string;
+var
+  percentValue: real;
+begin
+  percentValue := ((curValue * 100) / maxValue);
+  Result := FormatFloat('#,##0.00%', percentValue);
+end;
+
+function TLazUpdateManager.ConvertToMegabyte(curValue: real): Double;
+const
+  BytesPorMegabyte = 1048576;
+begin
+  Result := curValue / BytesPorMegabyte;
+end;
+
+procedure TLazUpdateManager.DownloadNewVersion;
+var
+  HTTPCliente: TFPHTTPClient;
+  NewVersionFile: TFileStream;
+begin
+  if (FLatestFileUrl = '') or (FDownloadFileName = '') then
+  begin
+    MessageDlg('Atualização',
+      'Defina a URL de download e o nome do arquivo de atualização.',
+      mtWarning, [mbOk], 0, mbOk);
+    Exit;
+  end;
+
+  DownloadingForm := TfrmUpdates.Create(nil);
+  try
+    DownloadingForm.Show;
+    InitSSLInterface;
+
+    HTTPCliente := TFPHTTPClient.Create(nil);
+    NewVersionFile := TFileStream.Create(DownloadFileName, fmCreate or fmOpenWrite);
+
+    try
+	    HTTPCliente.AllowRedirect := True;
+	    HTTPCliente.OnDataReceived := @ClientDataReceived;
+	    HTTPCliente.Get(LatestFileURL, NewVersionFile);
+      if Assigned(FOnDownloadFinished) then
+        FOnDownloadFinished(Self, DownloadFileName);
+      if ShowMessageEndDownload then
+      MessageDlg('',
+        MessageEndDownload,
+        mtInformation,
+        [mbOk], 0, mbOk);
+    except
+      on E: Exception do
+      begin
+        if Assigned(FOnDownloadError) then
+          FOnDownloadError(Self, E.Message);
+        if ShowMessageErrorDownload then
+          MessageDlg('',
+            MessageErrorDownload + #13 + E.Message,
+            mtWarning,
+            [mbOk], 0, mbOk);
+      end;
+		end;
+	finally
+    NewVersionFile.Free;
+    HTTPCliente.Free;
+    DownloadingForm.Free;
+	end;
+end;
+
+procedure TLazUpdateManager.DownloadException(Sender: TObject; E: Exception);
+begin
+  if Assigned(FOnDownloadError) then
+    FOnDownloadError(Self, E.Message)
+  else
+  if ShowMessageEndDownload then
+    MessageDlg('',
+      MessageEndDownload + #13 + E.Message,
+      mtWarning,
+      [mbOk], 0, mbOk);
+end;
+
+procedure TLazUpdateManager.ClientDataReceived(Sender: TObject;
+  const ContentLength, CurrentPos: Int64);
+var
+  mbAtual, mbTotal: Double;
+begin
+  if Assigned(DownloadingForm) then
+  begin
+    DownloadingForm.pbgProgress.Max := ContentLength;
+    DownloadingForm.pbgProgress.Position := CurrentPos;
+
+    if (CurrentPos > 0) and (ContentLength > 0) then
+      DownloadingForm.lblDownloaded.Caption :=
+        'Baixando nova versão [' + ConvertToPercent(ContentLength, CurrentPos) + ' concluídos.]';
+
+    mbTotal := ConvertToMegabyte(ContentLength);
+    mbAtual := ConvertToMegabyte(CurrentPos);
+
+    FileLength := Format('%2.f MB', [mbTotal]);
+
+    DownloadingForm.lblDownloadedSize.Caption :=
+      'Baixado: ' + Format('%2.f MB', [mbAtual]) + ' de ' + Format('%2.f MB', [mbTotal]);
+
+    Application.ProcessMessages;
+  end;
+end;
+
+function TLazUpdateManager.GetChangeLogFile: boolean;
+var
+  HTTPCliente: TFPHTTPClient;
+  NewVersionFile: TFileStream;
+begin
+  Result := False;
+  if (FChangelogUrl = '') or (FChangeLogFilename = '') then
+  begin
+    MessageDlg('ChangeLog',
+      'Defina a URL de download e o nome do arquivo de changelog.',
+      mtWarning, [mbOk], 0, mbOk);
+    Exit;
+  end;
+  InitSSLInterface;
+
+  HTTPCliente := TFPHTTPClient.Create(nil);
+  NewVersionFile := TFileStream.Create(ChangeLogFileName, fmCreate or fmOpenWrite);
+
+  try
+    try
+	    HTTPCliente.AllowRedirect := True;
+	    HTTPCliente.Get(ChangeLogURL, NewVersionFile);
+      Result := True;
+    except
+      on E: Exception do
+      begin
+        if ShowMessageGetChangeLogError then
+          MessageDlg('',
+            MessageGetChangeLogError + #13 + E.Message,
+            mtWarning,
+            [mbOk], 0, mbOk
+          );
+      end;
+		end;
+	finally
+    NewVersionFile.Free;
+    HTTPCliente.Free;
+	end;
+end;
+
+end.
+

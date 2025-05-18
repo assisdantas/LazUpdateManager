@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<CONFIG>
+  <Lazarus Version="4.0"/>
+  <Compiler Value="C:\lazarus\fpc\3.2.2\bin\i386-win32\fpc.exe" Date="1520656561"/>
+  <Params Value="-MObjFPC -Scghi -O1 -g -gl -l -vewnhiutbq -FuE:\Projetos\AutoUpdate\ -FuE:\Projetos\AutoUpdate\lib\i386-win32 -FuC:\lazarus\packager\units\i386-win32 -FuC:\lazarus\components\lazutils\lib\i386-win32 -FuC:\lazarus\components\freetype\lib\i386-win32 -FuC:\lazarus\lcl\units\i386-win32 -FuC:\lazarus\lcl\units\i386-win32\win32 -FUE:\Projetos\AutoUpdate\lib\i386-win32\ -dLCL -dLCLwin32 lazautoupdate.pas"/>
+</CONFIG>
